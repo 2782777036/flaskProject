@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>视频会议系统</title>
+    <script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.1.2/socket.io.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+
+        #app {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+
+        .message {
+            margin-bottom: 10px;
+            padding: 5px;
+            background-color: #f2f2f2;
+            border-radius: 5px;
+        }
+
+        .input-field {
+            margin-bottom: 10px;
+        }
+
+        input[type="text"],
+        button {
+            padding: 5px 10px;
+            font-size: 16px;
+        }
+
+        button {
+            background-color: #007bff;
+            color: #fff;
+            border: none;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .video-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: 20px;
+        }
+
+        video {
+            width: 300px;
+            height: auto;
+            border: 1px solid #ccc;
+        }
+    </style>
+</head>
+<body>
+<div id="app">
+    <div v-if="!joined">
+        <div class="input-field">
+            <input v-model="username" placeholder="用户名">
+        </div>
+        <div class="input-field">
+            <button @click="joinRoom" :disabled="username === ''">加入房间</button>
+        </div>
+    </div>
+    <div v-else>
+        <div v-if="!videoChatEnabled">
+            <h1>聊天室- {{ room }}</h1>
+            <ul>
+                <li v-for="message in messages" :key="message.id">{{ message.name }}: {{ message.text }}</li>
+            </ul>
+
+            <div class="input-field">
+                <input v-model="messageText" placeholder="Message">
+            </div>
+            <div class="input-field">
+                <button @click.prevent="sendMessage" :disabled="messageText === ''">发送</button>
+                <button @click="enableVideoChat">开始视频聊天</button>
+            </div>
+        </div>
+        <div v-else>
+            <div class="video-container">
+                <video ref="localVideo" autoplay></video>
+                <video ref="remoteVideo" autoplay></video>
+            </div>
+            <div class="input-field">
+                <button @click="leaveVideoChat">Leave Video Chat</button>
+            </div>
+            <div class="input-field">
+                <input v-model="messageText" name="text" placeholder="Message">
+            </div>
+            <div class="input-field">
+                <button @click.prevent="sendMessage">发送</button>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+    Vue.config.productionTip = false;
+    var socket = io();
+    var app = new Vue({
+            el: '#app',
+            data: {
+                messages: [],
+                room: 'MyRoom',  // 设置公共房间名称
+                username: '',
+                joined: false,
+                messageText: '',
+                videoChatEnabled: false,
+                localStream: null,
+                localVideo: null,
+                remoteVideo: null,
+                peerConnection: null,
+                turnServer: {
+                    urls: 'https://global.xirsys.net',
+                    username: 'make',
+                    credential: '8c06bf8c-ff82-11ed-a69d-0242ac130002',
+                    channel: 'MyRoom'
+                }
+            },
+            methods: {
+                joinRoom: function () {
+                    socket.emit('join', {
+                        room: app.room,
+                    });
+                    app.joined = true;
+                },
+                sendMessage: function () {
+                    var message = {
+                        room: this.room,
+                        text: this.messageText,
+                        name: this.username
+                    };
+                    socket.emit('message', message);
+                    this.messageText = '';
+                    this.getMessages()
+                },
+                enableVideoChat: function () {
+                    navigator.mediaDevices.getUserMedia({video: true, audio: false})
+                        .then((stream) => {
+                            this.localStream = stream;
+                            this.localVideo = this.$refs.localVideo;
+                            this.localVideo.srcObject = stream;
+
+                            this.peerConnection = new RTCPeerConnection({
+                                iceServers: [
+                                    {urls: 'stun:stun.l.google.com:19302'},
+                                    {
+                                        urls: this.turnServer.urls,
+                                        username: this.turnServer.username,
+                                        credential: this.turnServer.credential
+                                    }
+                                ]
+                            });
+                            this.peerConnection.addEventListener('icecandidate', this.handleIceCandidate);
+                            this.peerConnection.addEventListener('track', this.handleTrack);
+
+                            stream.getTracks().forEach((track) => {
+                                this.peerConnection.addTrack(track, stream);
+                            });
+
+                            this.peerConnection.createOffer()
+                                .then((offer) => {
+                                    return this.peerConnection.setLocalDescription(offer);
+                                })
+                                .then(() => {
+                                    var videoOffer = {
+                                        room: this.username,
+                                        offer: this.peerConnection.localDescription
+                                    };
+                                    socket.emit('video_offer', videoOffer);
+                                })
+                                .catch((error) => {
+                                    console.error('Error creating video offer:', error);
+                                });
+
+                            this.videoChatEnabled = true;
+                        })
+                        .catch((error) => {
+                            console.error('Error accessing camera:', error);
+                        });
+                },
+                leaveVideoChat: function () {
+                    this.localStream.getTracks().forEach((track) => {
+                        track.stop();
+                    });
+                    this.peerConnection.close();
+
+                    this.localStream = null;
+                    this.localVideo = null;
+                    this.remoteVideo = null;
+                    this.peerConnection = null;
+                    this.videoChatEnabled = false;
+
+                    socket.emit('leave', {room: this.username});
+                },
+                handleIceCandidate: function (event) {
+                    if (event.candidate) {
+                        var iceCandidate = {
+                            room: this.username,
+                            candidate: event.candidate
+                        };
+                        socket.emit('ice_candidate', iceCandidate);
+                    }
+                },
+                handleTrack: function (event) {
+                    if (!this.remoteVideo) {
+                        this.remoteVideo = this.$refs.remoteVideo;
+                        this.remoteVideo.srcObject = new MediaStream();
+                    }
+                    this.remoteVideo.srcObject.addTrack(event.track);
+                },
+                getMessages: function (username) {
+                    fetch(`/messages?username=${this.username}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            this.messages = data.messages;
+                        })
+                        .catch(error => {
+                            console.error('Error fetching messages:', error);
+                        });
+                }
+            }
+        }
+    )
+
+
+    socket.on('video_offer', function (data) {
+        var offer = data.offer;
+
+        app.peerConnection = new RTCPeerConnection({
+            iceServers: [
+                {urls: 'stun:stun.l.google.com:19302'},
+                {urls: app.turnServer.urls, username: app.turnServer.username, credential: app.turnServer.credential}
+            ]
+        });
+        app.peerConnection.addEventListener('icecandidate', app.handleIceCandidate);
+        app.peerConnection.addEventListener('track', app.handleTrack);
+
+        app.peerConnection.setRemoteDescription(offer)
+            .then(() => {
+                return app.peerConnection.createAnswer();
+            })
+            .then((answer) => {
+                return app.peerConnection.setLocalDescription(answer);
+            })
+            .then(() => {
+                var videoAnswer = {
+                    room: app.username,
+                    answer: app.peerConnection.localDescription
+                };
+                socket.emit('video_answer', videoAnswer);
+            })
+            .catch((error) => {
+                console.error('Error creating video answer:', error);
+            });
+    });
+
+
+    socket.on('video_answer', function (data) {
+        var answer = data.answer;
+        app.peerConnection.setRemoteDescription(answer)
+            .catch((error) => {
+                console.error('Error setting remote description:', error);
+            });
+    });
+
+
+    socket.on('ice_candidate', function (data) {
+        var candidate = data.candidate;
+        app.peerConnection.addIceCandidate(candidate)
+            .catch((error) => {
+                console.error('Error adding ICE candidate:', error);
+            });
+    });
+
+    socket.on('message', function (data) {
+        if (data.room === app.room) {
+            app.messages.push(data);
+        }
+    });
+</script>
+</body>
+</html>
