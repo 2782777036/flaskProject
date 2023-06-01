@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="aee6d2f9-63d4-469b-87d4-d0e7d7ee4710" name="falsk" url="http://101.43.148.52:5000/">
+        <fileTransfer rootFolder="/root/flaskProject" accessType="SFTP" host="101.43.148.52" port="22" sshConfigId="78b7a7fc-1b06-4daa-8d53-7c1fe52bbcad" sshConfig="root@101.43.148.52:22 key" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" isUseRsync="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
